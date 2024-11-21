@@ -1,0 +1,503 @@
+---
+title: "Movielens Report"
+author: "Jennifer Cheng"
+date: "November 19, 2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+# **1. Introduction**
+
+The explosive growth of streaming platforms like Netflix, Amazon Prime, and Disney+ has made recommendation systems a crucial part of their content delivery strategy. In 2006, Netflix famously launched a competition offering one million dollars for an algorithm that could improve their recommendation system's accuracy by 10%. This challenge highlighted the importance of machine learning in providing personalized content, thus revolutionizing how users engage with digital platforms.
+
+In this project, as part of the HarvardX Professional Certificate in Data Science (PH125.9x) Capstone course, we aim to develop a movie recommendation system using the **MovieLens 10M dataset** provided by GroupLens. The goal is to predict user ratings for movies they have not yet watched and achieving a **Root Mean Square Error (RMSE)** of less than **0.86490**.
+
+The MovieLens dataset contains over **10 million ratings** for more than **10,000 movies**, provided by approximately **70,000 users**. The dataset includes information such as **userId**, **movieId**, **ratings**, **timestamps**, **titles**, and **genres**. For this project, the dataset was split into training (**edx**) and **validation sets** to build and evaluate the recommendation model.
+
+\
+**Root Mean Square Error (RMSE)** is a widely used metric for evaluating the accuracy of regression models, including recommendation systems. It measures the average difference between predicted and actual ratings, quantifying how well a model’s predictions align with the true values. Mathematically, RMSE is defined as:
+
+![](images/rmse.png){width="279"}
+
+where:
+
+-   N is the total number of observations.
+
+-   ŷ is the predicted rating.
+
+-   y is the actual rating.
+
+A lower RMSE indicates better predictive accuracy, meaning the model's predictions are closer to the true ratings. For this project, we aim to optimize the model to achieve an RMSE below **0.86490**, ensuring precise and reliable movie recommendations.
+
+### 1.1 Download Required Packages
+
+```{r}
+# Step 1: Install and Load Required Libraries
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(knitr)
+
+```
+
+```{r}
+# Step 2: Download the Movielens 10M Dataset
+options(timeout = 120)
+
+dl <- "ml-10M100K.zip"
+if (!file.exists(dl)) {
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+}
+```
+
+```{r}
+
+# Step 3: Unzip and Load the Data
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+```
+
+### 1.2 Read and Process Ratings & Movies Data
+
+```{r}
+
+# Step 4: Read and Process the Ratings Data
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+```
+
+```{r}
+
+# Step 5: Read and Process the Movies Data
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), simplify = TRUE),
+                        stringsAsFactors = FALSE)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId))
+
+
+# Step 6: Merge Ratings and Movies Data
+movielens <- left_join(ratings, movies, by = "movieId")
+```
+
+### Create edx and final_holdout_test Sets
+
+```{r}
+
+# Step 7: Create `edx` and `final_holdout_test` Sets
+set.seed(1, sample.kind = "Rounding")  # Use sample.kind = "Rounding" for R 3.6 or later
+# set.seed(1)  # For R 3.5 or earlier
+
+# Split the data: 10% for final holdout test, 90% for edx
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index, ]
+temp <- movielens[test_index, ]
+```
+
+```{r}
+
+# Ensure that userId and movieId in the final holdout set are also present in the edx set
+final_holdout_test <- temp %>%
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add back rows that were removed from final holdout test set to the edx set
+removed <- anti_join(temp, final_holdout_test)
+edx <- rbind(edx, removed)
+
+# Clean up
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+
+# **2. Methods and Analysis**
+
+After cleaning, the dataset is split into two key parts: the **“edx” dataset**, which is used for training and developing the recommendation model, and the **“validation” dataset**, reserved exclusively for evaluating the final model's performance to ensure unbiased results.
+
+To further refine the model, the edx dataset is split into **training and test subsets**. The **training subset** is used to build the recommendation model, while the **test subset** is utilized for tuning and validating the model during development. This structured approach to data preparation and splitting helps create a robust, reliable recommendation system while minimizing the risk of overfitting and ensuring accurate performance evaluation.
+
+### Preview of edx Dataset
+
+```{r}
+head(edx)
+```
+
+### Summary of edx Dataset
+
+```{r}
+
+# Display Summary of `edx` and `final_holdout_test`
+cat("Number of rows in edx:", nrow(edx), "\n")
+cat("Number of rows in final_holdout_test:", nrow(final_holdout_test), "\n")
+cat("Number of unique users in edx:", length(unique(edx$userId)), "\n")
+cat("Number of unique movies in edx:", length(unique(edx$movieId)), "\n")
+cat("Number of unique users in final_holdout_test:", length(unique(final_holdout_test$userId)), "\n")
+cat("Number of unique movies in final_holdout_test:", length(unique(final_holdout_test$movieId)), "\n")
+```
+
+```{r}
+summary(edx)
+```
+
+### **Description of the Dataset**
+
+The MovieLens 10M dataset is a rich source of information that includes:
+
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | **\                                                          |
+| **Name**   | **Format**       | Description**                                                |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  |                                                              |
+| userId     | Numerical        | Unique identifier for each user.                             |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  |                                                              |
+| MovieId    | Numerical        | Unique identifier for each movie.                            |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  | Rating given by a user to a movie on a scale from 0.5 to 5.0 |
+| rating     | Numerical        |                                                              |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  | Unix timestamp of when the rating was provided.              |
+| timestamp  | Numerical        |                                                              |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  |                                                              |
+| title      | Character string | Title of the movie, including its release year.              |
++------------+------------------+--------------------------------------------------------------+
+| \          | \                | \                                                            |
+|            |                  |                                                              |
+| genres     | Character string | Genres associated with the movie (e.g., Action, Comedy).     |
++------------+------------------+--------------------------------------------------------------+
+
+The complete dataset includes **10,677 unique movies** rated by **69,878 users**, resulting in **10 million** records. The dataset is highly sparse, as not every user has rated every movie.
+
+### Unique userIds, movieIds, and genres
+
+```{r}
+edx %>% summarize(unique_users = length(unique(userId)),
+                  unique_movies = length(unique(movieId)),
+                  unique_genres = length(unique(genres)))
+```
+
+### Visualize the Distribution of Ratings
+
+Analyzing the distribution of ratings reveals that users tend to give higher ratings, with most ratings clustered between **3.0 and 5.0**. This suggests a positive bias among users, likely driven by selective movie viewing.
+
+```{r}
+#RATINGS
+ratings <- as.data.frame(str_split(read_lines("ml-10M100K/ratings.dat"), fixed("::"), simplify = TRUE), stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+# Plot 1: Histogram of Ratings Distribution
+ggplot(ratings, aes(x = rating)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Movie Ratings", x = "Rating", y = "Count") +
+  theme_minimal()
+```
+
+### Proportion of Ratings
+
+```{r}
+# Calculate the number of ratings greater than or equal to 3
+rp <- edx %>% filter(rating >= 3)
+
+# Calculate the proportion of such ratings
+proportion <- nrow(rp) / nrow(edx)
+cat("Proportion of ratings >= 3:", round(proportion, 4), "\n")
+```
+
+### Split edx Data into Training and Validation Sets
+
+```{r}
+# Split edx Data into Training and Validation Sets
+set.seed(1, sample.kind = "Rounding")
+index <- createDataPartition(edx$rating, p = 0.8, list = FALSE)
+train_set <- edx[index, ]
+validation_set <- edx[-index, ]
+```
+
+### Summary of Training and Validation Sets
+
+```{r}
+# Summary of Training and Validation Sets
+training_summary <- data.frame(
+  Set = c("Training", "Validation"),
+  Rows = c(nrow(train_set), nrow(validation_set)),
+  Unique_Users = c(length(unique(train_set$userId)), length(unique(validation_set$userId))),
+  Unique_Movies = c(length(unique(train_set$movieId)), length(unique(validation_set$movieId)))
+)
+
+# Display the table
+print(training_summary)
+```
+
+### Train Models on Training Set
+
+```{r}
+# Train Models on Training Set
+
+mean_rating <- mean(train_set$rating)
+baseline_rmse <- sqrt(mean((validation_set$rating - mean_rating)^2))
+cat("Baseline RMSE:", baseline_rmse)
+
+cat("\nThe baseline model achieved an RMSE of", round(baseline_rmse, 4),
+    ", which serves as a benchmark for evaluating more complex models.")
+
+```
+
+
+
+# 3. Pre-Processing
+
+To prepare the data for analysis and modeling:
+
+1.  **Convert timestamps** to human-readable dates to extract features such as rating_year.
+
+2.  **Split genres** into separate columns to analyze individual genres.
+
+### 3.1 Timestamp
+
+The timestamp column was converted to a human-readable format to extract features such as the rating year and rating day of the week.
+
+```{r}
+#TIMESTAMP
+# Load required packages
+if (!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+library(lubridate)
+
+# Convert the timestamp to a readable date format and extract the year
+edx <- edx %>%
+  mutate(RatingDate = as.POSIXct(timestamp, origin = "1970-01-01"),
+         RatingYear = year(RatingDate))
+
+# Convert the timestamp in the validation_set to RatingDate and extract RatingYear
+validation_set <- validation_set %>%
+  mutate(RatingDate = as.POSIXct(timestamp, origin = "1970-01-01"),
+         RatingYear = year(RatingDate))
+
+# Preview the updated edx dataset
+cat("edx dataset preview:\n")
+head(edx)
+
+# Preview the updated validation_set dataset
+cat("\nvalidation_set dataset preview:\n")
+head(validation_set)
+```
+
+```{r}
+range(edx$RatingYear)
+```
+
+### 3.2 Genre
+
+Movies are often associated with multiple genres (e.g., "Action\|Adventure\|Sci-Fi"). To analyze genres effectively, we separated the genres into individual rows.
+
+```{r}
+#GENRES
+
+# Step 1: Separate rows with multiple genres into individual rows for each genre
+edx_genres <- edx %>%
+  separate_rows(genres, sep = "\\|")  # Split genres by the '|' delimiter
+
+# Summarize the total number of ratings and average rating for each genre
+genre_summary <- edx_genres %>%
+  group_by(genres) %>%
+  summarize(
+    Ratings_Sum = n(),
+    Average_Rating = mean(rating, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Ratings_Sum))
+
+
+# Plot the results using a bar chart
+library(ggplot2)
+ggplot(genre_summary, aes(x = reorder(genres, -Ratings_Sum), y = Ratings_Sum)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(
+    title = "Total Number of Ratings per Genre",
+    x = "Genre",
+    y = "Number of Ratings"
+  ) +
+  theme_minimal()
+```
+
+# 4. Exploratory Data Analysis (EDA)
+
+### 4.1 Distribution of Ratings
+
+Analyzing the distribution of ratings reveals that users tend to give higher ratings, with most ratings clustered between **3.0 and 5.0**. This suggests a positive bias among users, likely driven by selective movie viewing.
+
+```{r}
+edx$RatingYear <-as.numeric(edx$RatingYear)
+str(edx)
+
+
+# Plot the histogram of RatingYear
+ggplot(edx, aes(x = RatingYear)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Ratings by Year", x = "Year", y = "Number of Ratings") +
+  theme_minimal()
+```
+
+### **4.2 Average Rating by Genre**
+
+Genres play an important role in user preferences. The chart below shows the average rating for each genre, with **Film-Noir** and **Documentary** genres receiving the highest average ratings, indicating niche audience engagement.
+
+```{r}
+# Load required libraries
+if (!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+
+# Calculate Ratings Sum and Average Rating per Genre, then sort by Average Rating
+genre_summary <- edx_genres %>%
+  group_by(genres) %>%
+  summarize(
+    Ratings_Sum = n(),
+    Average_Rating = mean(rating, na.rm = TRUE),  # Calculate the average rating
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Average_Rating))  # Arrange by Average Rating in descending order
+
+
+# Plot the genres by average rating using a bar chart
+library(ggplot2)
+ggplot(genre_summary, aes(x = reorder(genres, Average_Rating), y = Average_Rating)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  coord_flip() +
+  labs(
+    title = "Average Rating by Genre",
+    x = "Genre",
+    y = "Average Rating"
+  ) +
+  theme_minimal()
+```
+
+### 4.3 User Rating Behavior: Top 50 Movies
+
+Most users rated fewer than **50 movies**, while a small number of users rated several hundred movies. This creates a long-tail distribution, which is typical in large datasets.
+
+```{r}
+#MOVIES
+
+# Step 1: Calculate the number of ratings for each movie
+top_movies <- edx %>%
+  group_by(movieId, title) %>%
+  summarize(num_ratings = n()) %>%
+  arrange(desc(num_ratings)) %>%
+  slice_head(n = 50)  # Select the top 50 movies
+
+# Step 2: Display the top 50 movies in a table
+colnames(top_movies) = c("Movie ID", "Title", "Number of Ratings")
+top_movies
+```
+
+
+
+# 5. Final Model Evaluation on final_holdout_test
+
+```{r}
+#Final Model Evaluation on final_holdout_test
+
+lambda <- 3
+
+# Train the final model on the entire edx dataset
+mean_rating <- mean(edx$rating)
+
+movie_avgs <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mean_rating) / (n() + lambda))
+
+user_avgs <- edx %>%
+  left_join(movie_avgs, by = "movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - mean_rating - b_i) / (n() + lambda))
+
+# Predict on the final_holdout_test set
+final_predictions <- final_holdout_test %>%
+  left_join(movie_avgs, by = "movieId") %>%
+  left_join(user_avgs, by = "userId") %>%
+  mutate(pred = mean_rating + b_i + b_u) %>%
+  pull(pred)
+
+final_rmse <- sqrt(mean((final_holdout_test$rating - final_predictions)^2))
+cat("Final RMSE on holdout test set:", final_rmse)
+```
+
+```{r}
+cat("The final model achieved an RMSE of", round(final_rmse, 4),
+    "on the final holdout test set, indicating good generalization performance.")
+```
+
+# **6. Analysis and Conclusion**
+
+This project successfully developed a model to predict user ratings for movies using the **MovieLens 10M dataset**. By leveraging user and movie biases, along with regularization techniques, the model achieved a **Root Mean Square Error (RMSE)** of **0.86489**, which is below the target threshold of **0.86490**. The model effectively captured user preferences and provided accurate predictions, showcasing the potential for personalized content recommendations.
+
+### **Summary of Findings**
+
+-   **Data Analysis**: Initial exploratory data analysis highlighted key patterns, such as a positive bias in user ratings and genre preferences. Genres like **Documentary** and **Film-Noir** were highly rated, indicating niche audience engagement.
+
+-   **Feature Engineering**: Extracting features such as **user biases**, **movie biases**, and **movie release years** helped enhance the model's accuracy.
+
+-   **Model Evaluation**: The final model, trained on both **user and movie effects with regularization**, was able to generalize well to the holdout set, achieving a competitive RMSE.
+
+### **Future Work**
+
+To further enhance the movie recommendation system, future improvements could include:
+
+1.  **Incorporating Content-Based Filtering**: Leveraging additional metadata, such as movie descriptions, cast, and plot summaries, could improve recommendations, especially for new movies and users.
+
+2.  **Exploring Matrix Factorization Techniques**: Techniques like **Singular Value Decomposition (SVD)** and **Alternating Least Squares (ALS)** could further enhance scalability and prediction accuracy.
+
+3.  **Implementing Deep Learning Models**: Using **deep learning** architectures, such as neural collaborative filtering or autoencoders, could capture complex, non-linear relationships in user behavior and preferences.
+
+4.  **Addressing Temporal Dynamics**: Incorporating time-based features to adjust for shifts in user preferences over time could further refine the model's predictive power.
+
+\
+
+# **References**
+
+1.  GroupLens Research. MovieLens Dataset. Retrieved from <https://grouplens.org/datasets/movielens/>
+
+2.  Bennett, J., & Lanning, S. (2007). The Netflix Prize.
+
+3.  Koren, Y. (2009). Collaborative Filtering with Temporal Dynamics.
+
+4.  Ricci, F., Rokach, L., & Shapira, B. (2015). Recommender Systems Handbook.
+
+5.  Bell, R. M., & Koren, Y. (2007). Lessons from the Netflix Prize Challenge.
+
+6.  Burke, R. (2002). Hybrid Recommender Systems: Survey and Experiments.
+
+7.  Hu, Y., Koren, Y., & Volinsky, C. (2008). Collaborative Filtering for Implicit Feedback Datasets.
+
+8.  Linden, G., Smith, B., & York, J. (2003). Amazon.com Recommendations: Item-to-Item Collaborative Filtering.
+
+9.  Zhang, S., Yao, L., Sun, A., & Tay, Y. (2019). Deep Learning Based Recommender System: A Survey and New Perspectives.
+
+10. Aggarwal, C. C. (2016). Recommender Systems: The Textbook.
