@@ -9,4 +9,4 @@ Report.Rmd: Project report in .rmd format
 
 Report.pdf:  Project report in .pdf format
 
-RScript: R-Script that generates the data analysis
+RScript: R-Script 
